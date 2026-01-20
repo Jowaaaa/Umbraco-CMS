@@ -1,5 +1,9 @@
-﻿using NPoco;
+﻿using Microsoft.Extensions.Logging;
+using NPoco;
 using Umbraco.Cms.Core;
+using Umbraco.Cms.Core.Models;
+using Umbraco.Cms.Core.Services;
+using Umbraco.Cms.Infrastructure.Migrations.Install;
 using Umbraco.Cms.Infrastructure.Persistence;
 using Umbraco.Cms.Infrastructure.Persistence.Dtos;
 using Umbraco.Extensions;
@@ -8,10 +12,11 @@ namespace Umbraco.Cms.Infrastructure.Migrations.Upgrade.V_18_0_0;
 
 public class AddElements : AsyncMigrationBase
 {
-    public AddElements(IMigrationContext context)
+    private readonly IRelationService _relationService;
+
+    public AddElements(IMigrationContext context, IRelationService relationService)
         : base(context)
-    {
-    }
+        => _relationService = relationService;
 
     protected override Task MigrateAsync()
     {
@@ -19,6 +24,7 @@ public class AddElements : AsyncMigrationBase
         EnsureElementTables();
         EnsureElementRecycleBin();
         EnsureElementStartNodeColumn();
+        EnsureElementRelationTypes();
         return Task.CompletedTask;
     }
 
@@ -112,5 +118,53 @@ public class AddElements : AsyncMigrationBase
         {
             AddColumn<UserGroupDto>(Constants.DatabaseSchema.Tables.UserGroup, "startElementId");
         }
+    }
+
+    private void EnsureElementRelationTypes()
+    {
+        EnsureRelationType(
+            Constants.Conventions.RelationTypes.RelatedElementAlias,
+            Constants.Conventions.RelationTypes.RelatedElementName,
+            parentObjectType: null,
+            childObjectType: null,
+            isDependency: true);
+
+        EnsureRelationType(
+            Constants.Conventions.RelationTypes.RelateParentElementContainerOnElementDeleteAlias,
+            Constants.Conventions.RelationTypes.RelateParentElementContainerOnElementDeleteName,
+            parentObjectType: Constants.ObjectTypes.ElementContainer,
+            childObjectType: Constants.ObjectTypes.Element,
+            isDependency: false);
+
+        EnsureRelationType(
+            Constants.Conventions.RelationTypes.RelateParentElementContainerOnContainerDeleteAlias,
+            Constants.Conventions.RelationTypes.RelateParentElementContainerOnContainerDeleteName,
+            parentObjectType: Constants.ObjectTypes.ElementContainer,
+            childObjectType: Constants.ObjectTypes.ElementContainer,
+            isDependency: false);
+    }
+
+    private void EnsureRelationType(
+        string alias,
+        string name,
+        Guid? parentObjectType,
+        Guid? childObjectType,
+        bool isDependency)
+    {
+        IRelationType? relationType = _relationService.GetRelationTypeByAlias(alias);
+        if (relationType != null)
+        {
+            return;
+        }
+
+        // Generate a new unique relation type key that is the same as would have come from a new install.
+        Guid key = DatabaseDataCreator.CreateUniqueRelationTypeId(alias, name);
+
+        // Create new relation type using service, so the repository cache gets updated as well.
+        relationType = new RelationType(name, alias, false, parentObjectType, childObjectType, isDependency)
+        {
+            Key = key
+        };
+        _relationService.Save(relationType);
     }
 }
